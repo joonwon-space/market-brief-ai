@@ -92,3 +92,8 @@ venv.bak/
 
 # Local data
 data/
+
+# AWS credentials 보호
+.aws/
+**/.aws/
+*.pem

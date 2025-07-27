@@ -1,11 +1,13 @@
 import argparse
 from datetime import datetime
+import os
+
 from crawler import get_report_list
-from downloader import download_pdf, get_pdf_filename
+from downloader import download_pdf
 from parser import extract_text_from_pdf, save_text
 from summarizer import summarize_text, save_summary
+from uploader import upload_file
 from utils import get_data_path, get_date_str, sanitize_filename
-import os
 
 def get_all_paths(date: datetime, filename: str):
     pdf_path = os.path.join(get_data_path("raw", date), filename + ".pdf")
@@ -31,6 +33,7 @@ if __name__ == "__main__":
     else:
         target_date = datetime.today()
 
+    date_str = get_date_str(target_date)
     reports = get_report_list(target_date.strftime("%Y-%m-%d"))
     if not reports:
         print("📭 해당 날짜의 리포트가 없습니다.")
@@ -41,7 +44,7 @@ if __name__ == "__main__":
         base_filename = sanitize_filename(f"{report['company']}_{report['title']}")
         pdf_path, txt_path, summary_path = get_all_paths(target_date, base_filename)
 
-        # 1️⃣ PDF 다운로드
+        # 1️⃣ PDF 다운로드 또는 스킵
         if os.path.exists(pdf_path):
             print(f"📁 PDF 있음 → 스킵: {os.path.basename(pdf_path)}")
         else:
@@ -53,19 +56,32 @@ if __name__ == "__main__":
                 save_path=pdf_path
             )
 
-        # 2️⃣ 텍스트 추출
+        # ✅ S3 업로드 (raw)
+        if os.path.exists(pdf_path):
+            upload_file(pdf_path, f"data/raw/{date_str}/{os.path.basename(pdf_path)}")
+
+        # 2️⃣ 텍스트 추출 또는 스킵
         if os.path.exists(txt_path):
             print(f"📝 텍스트 있음 → 스킵: {os.path.basename(txt_path)}")
         else:
             text = extract_text_from_pdf(pdf_path)
             save_text(text, txt_path)
 
-        # 3️⃣ 요약
+        # ✅ S3 업로드 (text)
+        if os.path.exists(txt_path):
+            upload_file(txt_path, f"data/text/{date_str}/{os.path.basename(txt_path)}")
+
+        # 3️⃣ 요약 또는 스킵
         if os.path.exists(summary_path):
             print(f"🔍 요약 있음 → 스킵: {os.path.basename(summary_path)}")
         else:
-            text = open(txt_path, encoding="utf-8").read()
+            with open(txt_path, encoding="utf-8") as f:
+                text = f.read()
             short_text = text[:3000]
             summary = summarize_text(short_text)
             save_summary(summary, summary_path)
             print(f"✅ 요약 저장: {summary_path}")
+
+        # ✅ S3 업로드 (summary)
+        if os.path.exists(summary_path):
+            upload_file(summary_path, f"data/summary/{date_str}/{os.path.basename(summary_path)}")
