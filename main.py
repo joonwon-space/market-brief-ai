@@ -5,16 +5,16 @@ import os
 from crawler import get_report_list
 from downloader import download_pdf
 from parser import extract_text_from_pdf, save_text
-from summarizer import summarize_text, save_summary
 from uploader import upload_file
 from utils import get_data_path, get_date_str, sanitize_filename
+from embedder import embed_text
+from db import insert_chunk   # ✅ DB 저장 함수
 
 
 def get_all_paths(date: datetime, filename: str, create=False):
     pdf_path = os.path.join(get_data_path("raw", date, create=create), filename + ".pdf")
     txt_path = os.path.join(get_data_path("text", date, create=create), filename + ".txt")
-    summary_path = os.path.join(get_data_path("summary", date, create=create), filename + ".summary.txt")
-    return pdf_path, txt_path, summary_path
+    return pdf_path, txt_path
 
 
 def parse_args():
@@ -37,14 +37,14 @@ def run_for_date(target_date: datetime):
         print(f"\n{i+1}. {report['company']} - {report['title']}")
         base_filename = sanitize_filename(f"{report['company']}_{report['title']}")
 
-        # create=False로 폴더 미리 생성 방지
-        pdf_path, txt_path, summary_path = get_all_paths(target_date, base_filename, create=False)
+        # create=False → 파일 저장할 때만 폴더 생성
+        pdf_path, txt_path = get_all_paths(target_date, base_filename, create=False)
 
         # 1️⃣ PDF 다운로드
         if os.path.exists(pdf_path):
             print(f"📁 PDF 있음 → 스킵: {os.path.basename(pdf_path)}")
         else:
-            pdf_path, _, _ = get_all_paths(target_date, base_filename, create=True)
+            pdf_path, _ = get_all_paths(target_date, base_filename, create=True)
             download_pdf(
                 pdf_url=report["pdf_url"],
                 company=report["company"],
@@ -60,27 +60,33 @@ def run_for_date(target_date: datetime):
         if os.path.exists(txt_path):
             print(f"📝 텍스트 있음 → 스킵: {os.path.basename(txt_path)}")
         else:
-            _, txt_path, _ = get_all_paths(target_date, base_filename, create=True)
+            _, txt_path = get_all_paths(target_date, base_filename, create=True)
             text = extract_text_from_pdf(pdf_path)
             save_text(text, txt_path)
 
         if os.path.exists(txt_path):
             upload_file(txt_path, f"data/text/{date_str}/{os.path.basename(txt_path)}")
 
-        # 3️⃣ 요약
-        if os.path.exists(summary_path):
-            print(f"🔍 요약 있음 → 스킵: {os.path.basename(summary_path)}")
-        else:
-            _, _, summary_path = get_all_paths(target_date, base_filename, create=True)
-            with open(txt_path, encoding="utf-8") as f:
-                text = f.read()
-            short_text = text[:3000]
-            summary = summarize_text(short_text)
-            save_summary(summary, summary_path)
-            print(f"✅ 요약 저장: {summary_path}")
+        # 3️⃣ 임베딩 → PostgreSQL 저장
+        with open(txt_path, encoding="utf-8") as f:
+            text = f.read()
 
-        if os.path.exists(summary_path):
-            upload_file(summary_path, f"data/summary/{date_str}/{os.path.basename(summary_path)}")
+        chunks_and_vectors = embed_text(text)
+        print(f"✅ 임베딩 완료: {len(chunks_and_vectors)} chunks 생성")
+
+        for idx, (chunk, vector) in enumerate(chunks_and_vectors):
+            metadata = {
+                "company": report["company"],
+                "title": report["title"],
+                "date": report["date"]
+            }
+            insert_chunk(
+                file_id=base_filename,
+                chunk_index=idx,
+                content=chunk,
+                embedding=vector,
+                metadata=metadata
+            )
 
 
 if __name__ == "__main__":
@@ -97,11 +103,17 @@ if __name__ == "__main__":
     elif args.datefrom and args.dateto:
         try:
             start = datetime.strptime(args.datefrom, "%Y-%m-%d")
+        except ValueError:
+            print("❌ 시작 날짜 형식 오류: --datefrom YYYY-MM-DD")
+            exit(1)
+        try:
             end = datetime.strptime(args.dateto, "%Y-%m-%d")
-            if start > end:
-                raise ValueError("시작 날짜가 종료 날짜보다 이후입니다.")
-        except ValueError as e:
-            print(f"❌ 날짜 형식 오류 또는 범위 오류: {e}")
+        except ValueError:
+            print("❌ 종료 날짜 형식 오류: --dateto YYYY-MM-DD")
+            exit(1)
+
+        if start > end:
+            print("❌ 시작 날짜가 종료 날짜보다 이후입니다.")
             exit(1)
 
         cur = start
