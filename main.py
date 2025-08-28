@@ -54,6 +54,8 @@ def run_for_date(target_date: datetime):
             )
 
         if os.path.exists(pdf_path):
+            size_mb = os.path.getsize(pdf_path) / (1024 * 1024)
+            print(f"📊 PDF 파일 크기: {size_mb:.2f} MB")
             upload_file(pdf_path, f"data/raw/{date_str}/{os.path.basename(pdf_path)}")
 
         # 2️⃣ 텍스트 추출
@@ -71,23 +73,30 @@ def run_for_date(target_date: datetime):
         with open(txt_path, encoding="utf-8") as f:
             text = f.read()
 
-        chunks_and_vectors = embed_text(text)
-        print(f"✅ 임베딩 완료: {len(chunks_and_vectors)} chunks 생성")
+        # 3️⃣ 임베딩 → PostgreSQL 저장
+        try:
+            chunks_and_vectors = embed_text(text)
+            print(f"✅ 임베딩 완료: {len(chunks_and_vectors)} chunks 생성")
 
-        for idx, (chunk, vector) in enumerate(chunks_and_vectors):
-            metadata = {
-                "company": report["company"],
-                "title": report["title"],
-                "date": report["date"]
-            }
-            insert_chunk(
-                file_id=base_filename,
-                chunk_index=idx,
-                content=chunk,
-                embedding=vector,
-                metadata=metadata
-            )
-
+            for idx, (chunk, vector) in enumerate(chunks_and_vectors):
+                metadata = {
+                    "company": report["company"],
+                    "title": report["title"],
+                    "date": report["date"]
+                }
+                insert_chunk(
+                    file_id=base_filename,
+                    chunk_index=idx,
+                    content=chunk,
+                    embedding=vector,
+                    metadata=metadata
+                )
+        except RuntimeError as e:
+            err_msg = str(e)
+            if "Invalid buffer size" in err_msg:
+                print(f"🚨 {base_filename} 임베딩 스킵: {err_msg}")
+            else:
+                raise
 
 if __name__ == "__main__":
     args = parse_args()
