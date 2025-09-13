@@ -1,0 +1,11 @@
+requests
+psycopg2-binary
+boto3
+sentence-transformers
+
+openai  # ⭐️ OpenAI 추가
+pgvector
+
+unstructured[local-inference]
+
+tqdm # 진행상황 표시
